@@ -1,0 +1,23 @@
+{
+  "_comment": "Example schema for the --compare flag. Values below are illustrative, not real patient data. start_hour is 0-23, marking when each segment begins.",
+  "active_insulin_time": 4.0,
+  "max_basal": 3.0,
+  "max_bolus": 10.0,
+  "min_bg_for_bolus_calc": 70,
+  "basal_segments": [
+    {"start_hour": 0, "rate": 0.5}
+  ],
+  "isf_segments": [
+    {"start_hour": 0, "value": 150},
+    {"start_hour": 6, "value": 100},
+    {"start_hour": 22, "value": 150}
+  ],
+  "carb_ratio_segments": [
+    {"start_hour": 0, "value": 15},
+    {"start_hour": 6, "value": 12},
+    {"start_hour": 18, "value": 15}
+  ],
+  "target_segments": [
+    {"start_hour": 0, "target": 120}
+  ]
+}
