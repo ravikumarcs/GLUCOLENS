@@ -214,7 +214,7 @@ def render_results(results: dict):
             st.dataframe(segment_dataframe(comparison["target_segments"]), hide_index=True, use_container_width=True)
 
         if has_schedule_proposal:
-            st.subheader("New Time Segments (boundaries discovered from the data, up to 8 per setting)")
+            st.subheader("New Time Segments (boundaries discovered from the data, up to 7 per setting)")
             st.caption(
                 "A different question than the segments above (\"should today's "
                 "numbers change\" vs. \"is today's schedule shape even right\"). "

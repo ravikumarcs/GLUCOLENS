@@ -1,6 +1,6 @@
 """Tests for the schedule-discovery algorithm: the generic boundary-merge
 algorithm in src/schedule_discovery.py, and the engine's use of it to
-propose a new (<=8 segment) time schedule for ICR, ISF, and Target BG.
+propose a new (<=7 segment) time schedule for ICR, ISF, and Target BG.
 """
 
 import sys
@@ -24,25 +24,25 @@ class TestDiscoverSchedule(unittest.TestCase):
         lean = {h: ("raise" if 8 <= h < 12 else "lower" if 20 <= h < 23 else "neutral") for h in range(24)}
         n = {h: 5 for h in range(24)}
 
-        segments = discover_schedule(lean, n, max_segments=8, min_segment_hours=2)
+        segments = discover_schedule(lean, n, max_segments=7, min_segment_hours=2)
 
         # every returned segment is internally consistent (same lean throughout,
         # verified indirectly): boundaries should land at the lean transitions
         starts = [s for s, _ in segments]
         self.assertIn(8, starts)
-        self.assertLessEqual(len(segments), 8)
+        self.assertLessEqual(len(segments), 7)
         total_hours = sum(e - s for s, e in segments)
         self.assertEqual(total_hours, 24)
 
     def test_all_neutral_collapses_to_one_segment(self):
-        segments = discover_schedule({}, {}, max_segments=8, min_segment_hours=2)
+        segments = discover_schedule({}, {}, max_segments=7, min_segment_hours=2)
         self.assertEqual(segments, [(0, 24)])
 
     def test_respects_min_segment_hours(self):
         lean = {h: ("raise" if h == 12 else "neutral") for h in range(24)}
         n = {h: 1 for h in range(24)}
 
-        segments = discover_schedule(lean, n, max_segments=8, min_segment_hours=2)
+        segments = discover_schedule(lean, n, max_segments=7, min_segment_hours=2)
 
         for start, end in segments:
             self.assertGreaterEqual(end - start, 2)
@@ -52,9 +52,9 @@ class TestDiscoverSchedule(unittest.TestCase):
         lean = {h: ("raise" if h % 2 == 0 else "lower") for h in range(24)}
         n = {h: 1 for h in range(24)}
 
-        segments = discover_schedule(lean, n, max_segments=8, min_segment_hours=2)
+        segments = discover_schedule(lean, n, max_segments=7, min_segment_hours=2)
 
-        self.assertLessEqual(len(segments), 8)
+        self.assertLessEqual(len(segments), 7)
         total_hours = sum(e - s for s, e in segments)
         self.assertEqual(total_hours, 24)
 
@@ -151,7 +151,7 @@ class TestScheduleProposalEngine(unittest.TestCase):
 
         segments = proposal["target"]["segments"]
         self.assertGreater(len(segments), 1)
-        self.assertLessEqual(len(segments), 8)
+        self.assertLessEqual(len(segments), 7)
 
         # the 08:00-11:00 (severe) block should propose a lower target than
         # a milder overnight block
@@ -166,8 +166,8 @@ class TestScheduleProposalEngine(unittest.TestCase):
 
     def test_isf_schedule_honestly_collapses_when_data_is_sparse(self):
         """Mirrors the real data's ISF sparsity: almost no correction-only
-        events anywhere in the day. The algorithm must not invent an
-        8-segment schedule from near-nothing."""
+        events anywhere in the day. The algorithm must not invent a
+        7-segment schedule from near-nothing."""
         data = GloocolData()
         base = datetime(2026, 1, 1)
         for day in range(10):

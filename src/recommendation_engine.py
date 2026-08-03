@@ -50,7 +50,8 @@ class OmnipodRecommendationEngine:
 
     # Schedule discovery (new time-boundary proposals) -- see
     # generate_schedule_proposal() and src/schedule_discovery.py.
-    MAX_SCHEDULE_SEGMENTS = 8
+    # 7 is Omnipod's actual maximum number of time segments per setting.
+    MAX_SCHEDULE_SEGMENTS = 7
     MIN_SCHEDULE_SEGMENT_HOURS = 2
     # Net above-minus-below-range percentage-point thresholds for bucketing
     # an hour's TIR into a lean band -- see _target_hour_lean.
@@ -862,7 +863,7 @@ class OmnipodRecommendationEngine:
             })
 
     def generate_schedule_proposal(self) -> Dict:
-        """Discover a new, data-driven time schedule (<=8 segments) for carb
+        """Discover a new, data-driven time schedule (<=7 segments) for carb
         ratio, ISF, and target BG -- independent of the pump's currently
         configured segment boundaries. Requires current_settings: there's no
         meaningful "new schedule" without an existing one whose values can

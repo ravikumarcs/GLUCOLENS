@@ -135,7 +135,7 @@ def build_comparison_report(current: dict, recommendation: dict, schedule_propos
     """Build a current-vs-recommended comparison as a list of text lines,
     covering both comparison modes side by side: today's segment boundaries
     with adjusted values, and the newly-discovered schedule (different
-    boundaries, up to 8 segments) if `schedule_proposal` is provided.
+    boundaries, up to 7 segments) if `schedule_proposal` is provided.
 
     `current` follows the schema in data/sample_current_settings.json.
     `recommendation` is an OmnipodSettings.to_dict() (or the "recommendations"
@@ -193,7 +193,7 @@ def build_comparison_report(current: dict, recommendation: dict, schedule_propos
         lines.append("")
 
     if schedule_proposal and any((schedule_proposal.get(k) or {}).get("segments") for k in SCHEDULE_SETTING_LABELS):
-        lines.append("-- NEW TIME SEGMENTS (up to 8 per setting, boundaries discovered from the data) --")
+        lines.append("-- NEW TIME SEGMENTS (up to 7 per setting, boundaries discovered from the data) --")
         lines.append("")
         for key, label in SCHEDULE_SETTING_LABELS.items():
             setting = schedule_proposal.get(key) or {}
