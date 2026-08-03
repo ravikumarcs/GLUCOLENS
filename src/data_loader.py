@@ -2,6 +2,7 @@
 
 import csv
 import json
+import re
 import tempfile
 import zipfile
 from datetime import datetime
@@ -134,7 +135,10 @@ class GlookoDataLoader:
         
         with open(file_path, 'r') as f:
             content = json.load(f)
-        
+
+        if content.get('patient_name'):
+            data.patient_name = str(content['patient_name']).strip() or None
+
         # Process glucose readings
         if 'glucose_readings' in content:
             for item in content['glucose_readings']:
@@ -285,8 +289,30 @@ class GlookoDataLoader:
                     InsulinEvent(timestamp=timestamp, amount=amount, event_type=event_type)
                 )
 
+    @staticmethod
+    def _extract_patient_name(file_path: Path) -> Optional[str]:
+        """Parse the patient name from a Glooko export's leading metadata
+        line, e.g. 'Name:Jane Doe,Date Range:2026-01-01 - 2026-01-14'."""
+        try:
+            with open(file_path, 'r', encoding='utf-8-sig') as f:
+                first_line = f.readline()
+        except OSError:
+            return None
+
+        match = re.match(r'Name:([^,]*),', first_line.strip())
+        if not match:
+            return None
+        name = match.group(1).strip()
+        return name or None
+
     @classmethod
     def _load_glooko_export_dir(cls, root: Path, data: GloocolData) -> None:
+        for file_path in sorted(root.glob('**/*.csv')):
+            name = cls._extract_patient_name(file_path)
+            if name:
+                data.patient_name = name
+                break
+
         for file_path in sorted(root.glob('**/cgm_data*.csv')):
             cls._parse_glooko_cgm_file(file_path, data)
         for file_path in sorted(root.glob('**/bg_data*.csv')):

@@ -324,9 +324,18 @@ def format_output(data: dict) -> str:
         lines.append("=" * 60)
         
         if "data_summary" in data:
+            summary = data["data_summary"]
             lines.append("\nDATA SUMMARY:")
-            for key, value in data["data_summary"].items():
-                lines.append(f"  {key}: {value}")
+            if summary.get("patient_name"):
+                lines.append(f"  Patient: {summary['patient_name']}")
+            lines.append(f"  Total readings: {summary.get('total_readings', 'N/A')}")
+            lines.append(f"  Total meals: {summary.get('total_meals', 'N/A')}")
+            lines.append(f"  Total insulin events: {summary.get('total_insulin_events', 'N/A')}")
+            date_range = summary.get("date_range") or {}
+            if date_range.get("start") and date_range.get("end"):
+                lines.append(f"  Date range: {date_range['start']} to {date_range['end']}")
+            if summary.get("duration_days") is not None:
+                lines.append(f"  Duration: {summary['duration_days']} day(s)")
         
         if "glucose_statistics" in data:
             lines.append("\nGLUCOSE STATISTICS:")

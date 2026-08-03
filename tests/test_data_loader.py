@@ -106,6 +106,57 @@ class TestGlookoExportLoader(unittest.TestCase):
         with self.assertRaises(ValueError):
             GlookoDataLoader.load_glooko_export("/nonexistent/path/that/is/not/a/file.txt")
 
+    def test_patient_name_parsed_from_metadata_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_export_dir(root)
+
+            data = GlookoDataLoader.load_glooko_export(root)
+
+            self.assertEqual(data.patient_name, "Test Patient")
+
+    def test_patient_name_none_when_metadata_line_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "cgm_data_1.csv").write_text(
+                "Timestamp,CGM Glucose Value (mg/dl),Serial Number\r\n"
+                "2026-01-01 08:00,120.0,SERIAL123\r\n",
+                encoding="utf-8",
+            )
+
+            data = GlookoDataLoader.load_glooko_export(root)
+
+            self.assertIsNone(data.patient_name)
+
+
+class TestJsonLoaderPatientName(unittest.TestCase):
+    def test_patient_name_read_from_json_payload(self):
+        import json
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "export.json"
+            path.write_text(json.dumps({
+                "patient_name": "Test Patient",
+                "glucose_readings": [
+                    {"timestamp": "2026-01-01 08:00:00", "value": 120, "unit": "mg/dL", "source": "cgm"}
+                ],
+            }))
+
+            data = GlookoDataLoader.load_json(path)
+
+            self.assertEqual(data.patient_name, "Test Patient")
+
+    def test_patient_name_none_when_absent_from_json(self):
+        import json
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "export.json"
+            path.write_text(json.dumps({"glucose_readings": []}))
+
+            data = GlookoDataLoader.load_json(path)
+
+            self.assertIsNone(data.patient_name)
+
 
 if __name__ == "__main__":
     unittest.main()

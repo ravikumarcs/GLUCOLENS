@@ -91,13 +91,15 @@ def render_results(results: dict):
     current_settings = results["current_settings"]
 
     st.header("Data Summary")
+    if data.patient_name:
+        st.markdown(f"**Patient:** {data.patient_name}")
     start, end = data.get_time_range()
     days = (end - start).days + 1 if start and end else 0
     cols = st.columns(4)
     cols[0].metric("Glucose readings", len(data.glucose_readings))
     cols[1].metric("Meals", len(data.meals))
     cols[2].metric("Insulin events", len(data.insulin_events))
-    cols[3].metric("Days covered", days)
+    cols[3].metric("Duration", f"{days} day(s)")
 
     st.header("Glucose Statistics")
     cols = st.columns(3)

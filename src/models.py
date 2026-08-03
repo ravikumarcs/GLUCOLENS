@@ -130,7 +130,8 @@ class GloocolData:
     glucose_readings: List[GlucoseReading] = field(default_factory=list)
     meals: List[MealEvent] = field(default_factory=list)
     insulin_events: List[InsulinEvent] = field(default_factory=list)
-    
+    patient_name: Optional[str] = None
+
     def get_readings_in_range(self, start: datetime, end: datetime) -> List[GlucoseReading]:
         """Get glucose readings within a time range."""
         return [r for r in self.glucose_readings if start <= r.timestamp <= end]

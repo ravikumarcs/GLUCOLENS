@@ -224,5 +224,27 @@ class TestDataSufficiencyWarning(unittest.TestCase):
         self.assertTrue(any("day(s) of glucose data" in w for w in settings.warnings))
 
 
+class TestSummaryReportDataSummary(unittest.TestCase):
+    """generate_summary_report()'s data_summary should surface who the
+    report is about and how much data was actually considered."""
+
+    def test_includes_patient_name_and_duration(self):
+        data = _make_multi_day_data(days=10)
+        data.patient_name = "Test Patient"
+
+        engine = OmnipodRecommendationEngine(data)
+        summary = engine.generate_summary_report()["data_summary"]
+
+        self.assertEqual(summary["patient_name"], "Test Patient")
+        self.assertEqual(summary["duration_days"], 10)
+
+    def test_patient_name_and_duration_are_none_without_data(self):
+        engine = OmnipodRecommendationEngine(GloocolData())
+        summary = engine.generate_summary_report()["data_summary"]
+
+        self.assertIsNone(summary["patient_name"])
+        self.assertIsNone(summary["duration_days"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1116,10 +1116,12 @@ class OmnipodRecommendationEngine:
 
         return {
             "data_summary": {
+                "patient_name": self.data.patient_name,
                 "total_readings": len(self.data.glucose_readings),
                 "total_meals": len(self.data.meals),
                 "total_insulin_events": len(self.data.insulin_events),
                 "date_range": self._get_date_range(),
+                "duration_days": self._get_duration_days(),
             },
             "data_quality": self.analyzer.assess_data_sufficiency(),
             "glucose_statistics": stats,
@@ -1137,3 +1139,11 @@ class OmnipodRecommendationEngine:
             "start": start.isoformat() if start else None,
             "end": end.isoformat() if end else None,
         }
+
+    def _get_duration_days(self) -> Optional[int]:
+        """Calendar days spanned by the data, inclusive of both endpoints
+        (e.g. a reading on day 1 and a reading on day 3 spans 3 days)."""
+        start, end = self.data.get_time_range()
+        if not start or not end:
+            return None
+        return (end - start).days + 1
