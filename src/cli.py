@@ -92,6 +92,8 @@ def main():
             build_findings_report(engine.generate_findings_report())
             if current_settings else []
         )
+        schedule_proposal = engine.generate_schedule_proposal() if current_settings else {}
+        schedule_lines = build_schedule_report(schedule_proposal)
 
         # Output results
         if args.format == "json":
@@ -103,11 +105,15 @@ def main():
                     "process_note": TUNING_PROCESS_NOTE,
                     "findings": engine.generate_findings_report(),
                 }
+            if schedule_proposal:
+                output_with_disclaimer["schedule_proposal"] = schedule_proposal
             output_text = json.dumps(output_with_disclaimer, indent=2, default=str)
         else:
             output_text = format_output(output) + "\n\n" + format_disclaimer_block(output)
             if findings_lines:
                 output_text += "\n\n" + "\n".join(findings_lines)
+            if schedule_lines:
+                output_text += "\n\n" + "\n".join(schedule_lines)
             if comparison_lines:
                 output_text += "\n\n" + "\n".join(comparison_lines)
         
@@ -210,6 +216,52 @@ def _format_evidence_row(setting: str, row: dict) -> str:
     if setting == "Target Glucose (BGT)":
         return f"      {row['date']}  below range {row['below_pct']:.0f}%, above range {row['above_pct']:.0f}%"
     return f"      {row}"
+
+
+SCHEDULE_SETTING_LABELS = {
+    "carb_ratio": "INSULIN-TO-CARB RATIO (ICR)",
+    "isf": "CORRECTION FACTOR / SENSITIVITY (ISF)",
+    "target": "TARGET GLUCOSE (BGT)",
+}
+
+
+def build_schedule_report(proposal: dict) -> list:
+    """Format generate_schedule_proposal()'s output: a from-scratch,
+    data-driven time schedule (<=8 segments per setting), independent of
+    the pump's currently-configured segment boundaries. A different
+    question than the findings report above -- that one only adjusts
+    values within existing segments; this one questions whether the
+    segment boundaries themselves are in the right place.
+    """
+    if not proposal:
+        return []
+
+    lines = [
+        "=" * 60,
+        "PROPOSED NEW TIME SCHEDULE (up to 8 segments per setting)",
+        "=" * 60,
+        "",
+        "This re-derives segment BOUNDARIES from the data, not just values "
+        "within your existing segments -- treat it as a structural proposal, "
+        "subject to the same caution as the report above: one variable at a "
+        "time, small steps, hold and re-check.",
+        "",
+    ]
+
+    for key, label in SCHEDULE_SETTING_LABELS.items():
+        setting = proposal.get(key)
+        if not setting:
+            continue
+        lines.append(f"\n{label}:")
+        if setting.get("note"):
+            lines.append(f"  {setting['note']}")
+        for seg in setting["segments"]:
+            lines.append(
+                f"  [{seg['time_block']}] current weighted baseline: {seg['current_weighted_baseline']}"
+                f"  ->  proposed: {seg['proposed_value']}  ({seg['confidence']})"
+            )
+
+    return lines
 
 
 def build_findings_report(findings: list) -> list:

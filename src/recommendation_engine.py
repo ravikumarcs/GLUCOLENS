@@ -1,12 +1,13 @@
 """Generate Omnipod pump setting recommendations based on glucose analysis."""
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from .models import (
     OmnipodSettings, BasalProfile, InsulinSensitivityFactor,
     CarbRatio, GloocolData
 )
 from .analysis import GlucoseAnalyzer
 from .segments import segment_ranges, hours_in_range
+from .schedule_discovery import discover_schedule
 
 
 class OmnipodRecommendationEngine:
@@ -46,6 +47,21 @@ class OmnipodRecommendationEngine:
     # proposing incremental pump setting changes from CGM data.
     ADJUSTMENT_STEP_FRACTION = 0.15  # +-15% per proposed change, single step
     TARGET_ADJUSTMENT_STEP_MGDL = 10.0  # target is near-absolute, not scaled by %
+
+    # Schedule discovery (new time-boundary proposals) -- see
+    # generate_schedule_proposal() and src/schedule_discovery.py.
+    MAX_SCHEDULE_SEGMENTS = 8
+    MIN_SCHEDULE_SEGMENT_HOURS = 2
+    # Net above-minus-below-range percentage-point thresholds for bucketing
+    # an hour's TIR into a lean band -- see _target_hour_lean.
+    TARGET_LEAN_MODERATE_THRESHOLD = 15.0
+    TARGET_LEAN_STRONG_THRESHOLD = 40.0
+    # A single stray instance (1 event vs 0) shouldn't be enough to place a
+    # schedule boundary -- require at least this many before trusting an
+    # hour's lean at all. Deliberately lower than MIN_PATTERN_INSTANCES
+    # (which still gates the *final* per-segment decision): this is just a
+    # noise floor for boundary placement, not a proposal threshold.
+    MIN_HOURLY_LEAN_INSTANCES = 2
 
     def __init__(
         self,
@@ -452,6 +468,45 @@ class OmnipodRecommendationEngine:
         return f"{start_h:02d}:00-{end_display:02d}:00"
 
     @staticmethod
+    def _decide_direction(count_a: int, count_b: int) -> Tuple[Optional[str], int]:
+        """Shared Rule-of-Three decision: given two competing evidence
+        counts, decide which one (if either) both clears the minimum
+        instance threshold and dominates the other. Returns ("a", count),
+        ("b", count), or (None, 0). Ties favor "a" -- callers control which
+        side that is via argument order, and map "a"/"b" to their own
+        semantic direction labels (e.g. ICR/ISF: a=too_weak->"lower",
+        b=too_strong->"raise"; Target: a=lows_dominant->"raise",
+        b=highs_dominant->"lower" -- the label mapping differs, the gating
+        logic doesn't).
+        """
+        if count_a >= GlucoseAnalyzer.MIN_PATTERN_INSTANCES and count_a >= count_b:
+            return "a", count_a
+        if count_b >= GlucoseAnalyzer.MIN_PATTERN_INSTANCES:
+            return "b", count_b
+        return None, 0
+
+    @staticmethod
+    def _weighted_average_value(current_segments: List[Dict], start_h: int, end_h: int, value_key: str) -> float:
+        """Time-weighted average of the old segment value(s) overlapping
+        [start_h, end_h) -- the baseline for a newly-discovered segment
+        that may span multiple old segments with different values.
+        """
+        if not current_segments:
+            return 0.0
+
+        weighted_sum = 0.0
+        total_weight = 0.0
+        for seg, (seg_start, seg_end) in OmnipodRecommendationEngine._sorted_segments_with_ranges(current_segments):
+            overlap = max(0, min(end_h, seg_end) - max(start_h, seg_start))
+            if overlap > 0:
+                weighted_sum += seg[value_key] * overlap
+                total_weight += overlap
+
+        if total_weight == 0:
+            return sum(s[value_key] for s in current_segments) / len(current_segments)
+        return weighted_sum / total_weight
+
+    @staticmethod
     def _basal_evidence(instances: List[Dict]) -> List[Dict]:
         """Concrete per-night evidence rows for a basal drift finding."""
         return [
@@ -621,12 +676,8 @@ class OmnipodRecommendationEngine:
             too_weak = [e for e in segment_events if e["classification"] == "too_weak"]
             too_strong = [e for e in segment_events if e["classification"] == "too_strong"]
 
-            if len(too_weak) >= GlucoseAnalyzer.MIN_PATTERN_INSTANCES and len(too_weak) >= len(too_strong):
-                direction, count = "lower", len(too_weak)
-            elif len(too_strong) >= GlucoseAnalyzer.MIN_PATTERN_INSTANCES:
-                direction, count = "raise", len(too_strong)
-            else:
-                direction, count = "no change", 0
+            winner, count = self._decide_direction(len(too_weak), len(too_strong))
+            direction = {"a": "lower", "b": "raise", None: "no change"}[winner]
 
             if direction == "no change":
                 new_value = current_value
@@ -695,12 +746,8 @@ class OmnipodRecommendationEngine:
             too_weak = [m for m in segment_meals if m["classification"] == "too_weak"]
             too_strong = [m for m in segment_meals if m["classification"] == "too_strong"]
 
-            if len(too_weak) >= GlucoseAnalyzer.MIN_PATTERN_INSTANCES and len(too_weak) >= len(too_strong):
-                direction, count = "lower", len(too_weak)
-            elif len(too_strong) >= GlucoseAnalyzer.MIN_PATTERN_INSTANCES:
-                direction, count = "raise", len(too_strong)
-            else:
-                direction, count = "no change", 0
+            winner, count = self._decide_direction(len(too_weak), len(too_strong))
+            direction = {"a": "lower", "b": "raise", None: "no change"}[winner]
 
             if direction == "no change":
                 new_value = current_value
@@ -771,12 +818,9 @@ class OmnipodRecommendationEngine:
             lows_dominant_days = sum(1 for d in daily if d["below_pct"] > 0 and d["below_pct"] >= d["above_pct"])
             highs_dominant_days = sum(1 for d in daily if d["above_pct"] > 0 and d["above_pct"] > d["below_pct"])
 
-            if lows_dominant_days >= GlucoseAnalyzer.MIN_PATTERN_INSTANCES and lows_dominant_days >= highs_dominant_days:
-                direction, count, delta = "raise", lows_dominant_days, step
-            elif highs_dominant_days >= GlucoseAnalyzer.MIN_PATTERN_INSTANCES:
-                direction, count, delta = "lower", highs_dominant_days, -step
-            else:
-                direction, count, delta = "no change", 0, 0.0
+            winner, count = self._decide_direction(lows_dominant_days, highs_dominant_days)
+            direction = {"a": "raise", "b": "lower", None: "no change"}[winner]
+            delta = step if direction == "raise" else -step
 
             if direction == "no change":
                 new_value = current_value
@@ -812,6 +856,250 @@ class OmnipodRecommendationEngine:
                 "confidence": f"supported (n={count})" if direction != "no change" else "insufficient evidence",
                 "what_to_watch": watch,
             })
+
+    def generate_schedule_proposal(self) -> Dict:
+        """Discover a new, data-driven time schedule (<=8 segments) for carb
+        ratio, ISF, and target BG -- independent of the pump's currently
+        configured segment boundaries. Requires current_settings: there's no
+        meaningful "new schedule" without an existing one whose values can
+        be reshaped into the newly-discovered windows.
+
+        This answers a different question than generate_findings_report():
+        that report asks "should today's numbers change"; this one asks "is
+        today's schedule *shape* even right". Both are meant to be read
+        side by side, not as a replacement for one another.
+        """
+        if not self.current_settings:
+            return {}
+
+        return {
+            "carb_ratio": self._discover_carb_ratio_schedule(),
+            "isf": self._discover_isf_schedule(),
+            "target": self._discover_target_schedule(),
+        }
+
+    @staticmethod
+    def _hourly_lean(low_by_hour: Dict[int, int], high_by_hour: Dict[int, int]) -> Tuple[Dict[int, str], Dict[int, int]]:
+        """Rough per-hour directional lean from raw instance counts. Not
+        Rule-of-Three-gated (that's applied afterward, once, on the pooled
+        evidence within each final discovered segment) -- but an hour with
+        fewer than MIN_HOURLY_LEAN_INSTANCES total is still forced neutral,
+        so a single stray event can't place a schedule boundary on its own.
+        """
+        lean, n = {}, {}
+        for h in range(24):
+            lo, hi = low_by_hour.get(h, 0), high_by_hour.get(h, 0)
+            n[h] = lo + hi
+            if n[h] < OmnipodRecommendationEngine.MIN_HOURLY_LEAN_INSTANCES:
+                lean[h] = "neutral"
+            else:
+                lean[h] = "lower" if lo > hi else "raise" if hi > lo else "neutral"
+        return lean, n
+
+    def _discover_carb_ratio_schedule(self) -> Dict:
+        """New ICR schedule: hourly lean from meal-response classification,
+        pooled per discovered segment, same Rule-of-Three/15%-step logic as
+        _generate_carb_ratio_from_baseline but evaluated on new boundaries.
+        """
+        meals = self.analyzer.analyze_meal_response_for_icr()
+        low_by_hour: Dict[int, int] = {}
+        high_by_hour: Dict[int, int] = {}
+        for m in meals:
+            h = m["meal_time"].hour
+            if m["classification"] == "too_weak":
+                low_by_hour[h] = low_by_hour.get(h, 0) + 1
+            elif m["classification"] == "too_strong":
+                high_by_hour[h] = high_by_hour.get(h, 0) + 1
+
+        lean, n = self._hourly_lean(low_by_hour, high_by_hour)
+        boundaries = discover_schedule(lean, n, self.MAX_SCHEDULE_SEGMENTS, self.MIN_SCHEDULE_SEGMENT_HOURS)
+        current_segments = self.current_settings.get("carb_ratio_segments") or []
+
+        segments = []
+        for start_h, end_h in boundaries:
+            hours = set(hours_in_range(start_h, end_h))
+            segment_meals = [m for m in meals if m["meal_time"].hour in hours]
+            too_weak = sum(1 for m in segment_meals if m["classification"] == "too_weak")
+            too_strong = sum(1 for m in segment_meals if m["classification"] == "too_strong")
+            winner, count = self._decide_direction(too_weak, too_strong)
+            direction = {"a": "lower", "b": "raise", None: "no change"}[winner]
+
+            baseline = self._weighted_average_value(current_segments, start_h, end_h, "value")
+            if direction == "no change":
+                proposed = baseline
+                confidence = "insufficient evidence"
+            else:
+                factor = 1 - self.ADJUSTMENT_STEP_FRACTION if direction == "lower" else 1 + self.ADJUSTMENT_STEP_FRACTION
+                proposed = self._clamp_carb_ratio(round(baseline * factor, 1))
+                confidence = f"supported (n={count})"
+
+            segments.append({
+                "start_hour": start_h,
+                "end_hour": end_h,
+                "time_block": self._format_time_block(start_h, end_h),
+                "current_weighted_baseline": round(baseline, 1),
+                "proposed_value": round(proposed, 1),
+                "confidence": confidence,
+                "evidence_count": len(segment_meals),
+            })
+
+        note = None
+        if len(segments) == 1:
+            note = (
+                "Meal-response data doesn't show a distinct enough pattern by time of "
+                "day to support more than one carb-ratio segment."
+            )
+
+        return {"segments": segments, "note": note}
+
+    def _discover_isf_schedule(self) -> Dict:
+        """New ISF schedule: hourly lean from correction-only-event
+        classification, pooled per discovered segment. Isolated
+        correction-only events are frequently sparse (especially on an
+        automated closed-loop pump), so this often -- honestly -- collapses
+        to very few segments rather than filling out all 8.
+        """
+        events = self.analyzer.analyze_correction_only_events()
+        low_by_hour: Dict[int, int] = {}
+        high_by_hour: Dict[int, int] = {}
+        for e in events:
+            h = e["time"].hour
+            if e["classification"] == "too_weak":
+                low_by_hour[h] = low_by_hour.get(h, 0) + 1
+            elif e["classification"] == "too_strong":
+                high_by_hour[h] = high_by_hour.get(h, 0) + 1
+
+        lean, n = self._hourly_lean(low_by_hour, high_by_hour)
+        boundaries = discover_schedule(lean, n, self.MAX_SCHEDULE_SEGMENTS, self.MIN_SCHEDULE_SEGMENT_HOURS)
+        current_segments = self.current_settings.get("isf_segments") or []
+
+        segments = []
+        for start_h, end_h in boundaries:
+            hours = set(hours_in_range(start_h, end_h))
+            segment_events = [e for e in events if e["time"].hour in hours]
+            too_weak = sum(1 for e in segment_events if e["classification"] == "too_weak")
+            too_strong = sum(1 for e in segment_events if e["classification"] == "too_strong")
+            winner, count = self._decide_direction(too_weak, too_strong)
+            direction = {"a": "lower", "b": "raise", None: "no change"}[winner]
+
+            baseline = self._weighted_average_value(current_segments, start_h, end_h, "value")
+            if direction == "no change":
+                proposed = baseline
+                confidence = "insufficient evidence"
+            else:
+                factor = 1 - self.ADJUSTMENT_STEP_FRACTION if direction == "lower" else 1 + self.ADJUSTMENT_STEP_FRACTION
+                proposed = round(baseline * factor, 1)
+                confidence = f"supported (n={count})"
+
+            segments.append({
+                "start_hour": start_h,
+                "end_hour": end_h,
+                "time_block": self._format_time_block(start_h, end_h),
+                "current_weighted_baseline": round(baseline, 1),
+                "proposed_value": round(proposed, 1),
+                "confidence": confidence,
+                "evidence_count": len(segment_events),
+            })
+
+        note = None
+        if len(segments) == 1:
+            note = (
+                "Isolated correction-only events (a bolus with no meal nearby) are too "
+                "sparse across the day to support more than one ISF segment -- this is "
+                "common on automated closed-loop pumps, which make their own frequent "
+                "micro-adjustments rather than leaving clear, isolated correction events "
+                "to analyze."
+            )
+
+        return {"segments": segments, "note": note}
+
+    @staticmethod
+    def _target_hour_lean(below_pct: float, above_pct: float) -> str:
+        """Magnitude-aware lean bucket for one hour's TIR breakdown.
+
+        A plain "above > below" binary comparison has no discriminating
+        power for a patient who runs high nearly every hour of the day --
+        every single hour would come out "highs dominant" and the whole
+        schedule would collapse to one segment, hiding a real pattern that
+        exists in the *degree* of highs (a sharp post-breakfast spike vs. a
+        milder overnight elevation), not its direction. Bucketing the net
+        score (above% - below%) into five bands lets boundary discovery see
+        that gradient instead of just its sign.
+        """
+        net = above_pct - below_pct
+        if net >= OmnipodRecommendationEngine.TARGET_LEAN_STRONG_THRESHOLD:
+            return "net_very_high"
+        if net >= OmnipodRecommendationEngine.TARGET_LEAN_MODERATE_THRESHOLD:
+            return "net_high"
+        if net <= -OmnipodRecommendationEngine.TARGET_LEAN_STRONG_THRESHOLD:
+            return "net_very_low"
+        if net <= -OmnipodRecommendationEngine.TARGET_LEAN_MODERATE_THRESHOLD:
+            return "net_low"
+        return "net_neutral"
+
+    def _discover_target_schedule(self) -> Dict:
+        """New target-BG schedule: hourly lean from raw above/below-range
+        percentage (rich, full-coverage data), bucketed by magnitude (see
+        _target_hour_lean) so a patient who runs high most of the day still
+        shows the *shape* of that pattern rather than collapsing to one
+        segment. The final per-segment decision re-applies the same per-day
+        dominance/Rule-of-Three check as _analyze_target_segments (a single
+        aggregate percentage can't gate the decision -- one bad day could
+        dominate it).
+        """
+        target_min = self._estimate_target_min({})
+        target_max = self._estimate_target_max({})
+
+        lean: Dict[int, str] = {}
+        n: Dict[int, int] = {}
+        for h in range(24):
+            readings = [r for r in self.analyzer.readings if r.timestamp.hour == h]
+            n[h] = len(readings)
+            if not readings:
+                lean[h] = "net_neutral"
+                continue
+            below_pct = 100 * sum(1 for r in readings if r.value < target_min) / len(readings)
+            above_pct = 100 * sum(1 for r in readings if r.value > target_max) / len(readings)
+            lean[h] = self._target_hour_lean(below_pct, above_pct)
+
+        boundaries = discover_schedule(lean, n, self.MAX_SCHEDULE_SEGMENTS, self.MIN_SCHEDULE_SEGMENT_HOURS)
+        current_segments = self.current_settings.get("target_segments") or []
+
+        segments = []
+        for start_h, end_h in boundaries:
+            daily = self.analyzer.compute_daily_tir_by_hour_range((start_h, end_h), target_min, target_max)
+            lows_dominant_days = sum(1 for d in daily if d["below_pct"] > 0 and d["below_pct"] >= d["above_pct"])
+            highs_dominant_days = sum(1 for d in daily if d["above_pct"] > 0 and d["above_pct"] > d["below_pct"])
+            winner, count = self._decide_direction(lows_dominant_days, highs_dominant_days)
+            direction = {"a": "raise", "b": "lower", None: "no change"}[winner]
+
+            baseline = self._weighted_average_value(current_segments, start_h, end_h, "target")
+            if direction == "no change":
+                proposed = baseline
+                confidence = "insufficient evidence"
+            else:
+                delta = self.TARGET_ADJUSTMENT_STEP_MGDL if direction == "raise" else -self.TARGET_ADJUSTMENT_STEP_MGDL
+                proposed = min(target_max, max(target_min + 10, baseline + delta))
+                confidence = f"supported (n={count})"
+
+            segments.append({
+                "start_hour": start_h,
+                "end_hour": end_h,
+                "time_block": self._format_time_block(start_h, end_h),
+                "current_weighted_baseline": round(baseline, 1),
+                "proposed_value": round(proposed, 1),
+                "confidence": confidence,
+                "evidence_count": len(daily),
+            })
+
+        note = None
+        if len(segments) == 1:
+            note = (
+                "Time-in-range doesn't vary distinctly enough by time of day to support "
+                "more than one target segment."
+            )
+
+        return {"segments": segments, "note": note}
 
     def generate_summary_report(self) -> Dict:
         """Generate a summary report of analysis and recommendations."""

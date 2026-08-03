@@ -175,6 +175,41 @@ def render_results(results: dict):
                             use_container_width=True,
                         )
 
+    schedule_proposal = results.get("schedule_proposal") or {}
+    schedule_labels = {
+        "carb_ratio": "Insulin-to-Carb Ratio (ICR)",
+        "isf": "Correction Factor / Sensitivity (ISF)",
+        "target": "Target Glucose (BGT)",
+    }
+    if any(schedule_proposal.get(k, {}).get("segments") for k in schedule_labels):
+        st.header("Proposed New Time Schedule")
+        st.caption(
+            "This re-derives segment boundaries from the data (up to 8 per "
+            "setting), not just values within your current segments -- a "
+            "different question than the proposal above (\"should today's "
+            "numbers change\" vs. \"is today's schedule shape even right\"). "
+            "Same caution applies: one variable at a time, small steps, hold "
+            "and re-check."
+        )
+
+        for key, label in schedule_labels.items():
+            setting = schedule_proposal.get(key) or {}
+            segments = setting.get("segments") or []
+            if not segments:
+                continue
+            st.subheader(label)
+            if setting.get("note"):
+                st.info(setting["note"])
+            df = pd.DataFrame(segments)[
+                ["time_block", "current_weighted_baseline", "proposed_value", "confidence"]
+            ].rename(columns={
+                "time_block": "Time block",
+                "current_weighted_baseline": "Current weighted baseline",
+                "proposed_value": "Proposed value",
+                "confidence": "Confidence",
+            })
+            st.dataframe(df, hide_index=True, use_container_width=True)
+
     if current_settings:
         st.header("Current vs Recommended")
         st.info(AUTOMATED_MODE_NOTE)
@@ -326,6 +361,7 @@ def main():
                 "tir": engine.analyzer.get_time_in_range(),
                 "current_settings": current_settings,
                 "findings": engine.generate_findings_report(),
+                "schedule_proposal": engine.generate_schedule_proposal(),
             }
         except Exception as e:
             st.error(f"Failed to process file: {e}")
