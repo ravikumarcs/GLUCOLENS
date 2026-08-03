@@ -415,6 +415,8 @@ class OmnipodRecommendationEngine:
         Always clamped to stay comfortably above target_min, so a low mean
         glucose (e.g. from a patient already running low) can never pull the
         correction target down toward or below the hypoglycemia threshold.
+        Rounded to the nearest mg/dL -- a fractional BG target isn't
+        meaningful (a pump can't be set to "120.34 mg/dL").
         """
         if not stats:
             candidate = 120.0
@@ -423,7 +425,7 @@ class OmnipodRecommendationEngine:
             candidate = mean - 10 if mean < 120 else 120.0
 
         lower_bound = target_min + 10
-        return min(target_max, max(lower_bound, candidate))
+        return round(min(target_max, max(lower_bound, candidate)))
 
     def _estimate_max_bolus(self, tdd: Optional[float], warnings: List[str]) -> float:
         """Estimate maximum bolus allowed.
@@ -831,7 +833,9 @@ class OmnipodRecommendationEngine:
                 watch = None
                 evidence_source = daily
             else:
-                new_value = min(target_max, max(target_min + 10, current_value + delta))
+                # Rounded to the nearest mg/dL -- a fractional BG target isn't
+                # meaningful (a pump can't be set to "126.5 mg/dL").
+                new_value = round(min(target_max, max(target_min + 10, current_value + delta)))
                 dominant = "lows" if direction == "raise" else "highs"
                 pattern = f"{count} of {len(daily)} day(s) with data in this window were {dominant}-dominant."
                 watch = (
@@ -1087,7 +1091,9 @@ class OmnipodRecommendationEngine:
                 "end_hour": end_h,
                 "time_block": self._format_time_block(start_h, end_h),
                 "current_weighted_baseline": round(baseline, 1),
-                "proposed_value": round(proposed, 1),
+                # Rounded to the nearest mg/dL -- a fractional BG target
+                # isn't meaningful (a pump can't be set to "124.5 mg/dL").
+                "proposed_value": round(proposed),
                 "confidence": confidence,
                 "evidence_count": len(daily),
             })

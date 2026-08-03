@@ -320,6 +320,32 @@ class TestBaselineRelativeEngine(unittest.TestCase):
         target_finding = next(f for f in findings if f["setting"] == "Target Glucose (BGT)")
         self.assertIn("evidence", target_finding)
 
+    def test_target_finding_proposed_value_is_rounded_to_the_nearest_integer(self):
+        """A fractional BG target isn't meaningful -- a pump can't be set to
+        '123.3 mg/dL'. current=133.3 with a highs-dominant pattern proposes
+        133.3 - 10 = 123.3 before rounding.
+        """
+        data = GloocolData()
+        base = datetime(2026, 1, 1)
+        for day in range(5):
+            day_start = base + timedelta(days=day)
+            for minute in range(0, 24 * 60, 15):
+                data.glucose_readings.append(_gr(day_start + timedelta(minutes=minute), 220.0))
+
+        current_settings = {
+            "active_insulin_time": 4.0,
+            "target_segments": [{"start_hour": 0, "target": 133.3}],
+        }
+        engine = OmnipodRecommendationEngine(data, current_settings=current_settings)
+        engine.generate_recommendations()
+        finding = next(
+            f for f in engine.generate_findings_report() if f["setting"] == "Target Glucose (BGT)"
+        )
+
+        self.assertEqual(finding["proposed_direction"], "lower")
+        self.assertEqual(finding["proposed_value"], 123)
+        self.assertIsInstance(finding["proposed_value"], int)
+
     def test_icr_evidence_reflects_the_meals_driving_the_proposal(self):
         """With enough qualifying meals to trigger a proposal, the evidence
         rows should be exactly the too_weak meals that drove it -- concrete,

@@ -78,6 +78,23 @@ class TestCorrectionTarget(unittest.TestCase):
         self.assertGreaterEqual(settings.correction_target, settings.target_glucose_min + 10)
         self.assertLessEqual(settings.correction_target, settings.target_glucose_max)
 
+    def test_correction_target_is_rounded_to_the_nearest_integer(self):
+        """A fractional BG target isn't meaningful -- a pump can't be set to
+        '105.7 mg/dL'. mean=115.7 would give a candidate of 105.7 before
+        rounding (mean - 10, since mean < 120)."""
+        data = GloocolData()
+        base = datetime(2026, 1, 1)
+        data.glucose_readings = [
+            GlucoseReading(timestamp=base + timedelta(minutes=5 * i), value=115.7, unit=GlucoseUnit.MG_DL)
+            for i in range(500)
+        ]
+
+        engine = OmnipodRecommendationEngine(data)
+        settings = engine.generate_recommendations()
+
+        self.assertEqual(settings.correction_target, round(settings.correction_target))
+        self.assertEqual(settings.correction_target, 106)
+
 
 class TestMaxBasalAndBolusScaleWithDose(unittest.TestCase):
     """max_basal/max_bolus must scale with the patient's actual dosing, not

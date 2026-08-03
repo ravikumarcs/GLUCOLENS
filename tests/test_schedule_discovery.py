@@ -159,6 +159,11 @@ class TestScheduleProposalEngine(unittest.TestCase):
         mild = next(s for s in segments if s["start_hour"] <= 1 < s["end_hour"])
         self.assertLess(severe["proposed_value"], mild["proposed_value"])
 
+        # A fractional BG target isn't meaningful -- every proposed target
+        # value in the schedule must be a whole number.
+        for seg in segments:
+            self.assertIsInstance(seg["proposed_value"], int)
+
     def test_isf_schedule_honestly_collapses_when_data_is_sparse(self):
         """Mirrors the real data's ISF sparsity: almost no correction-only
         events anywhere in the day. The algorithm must not invent an
