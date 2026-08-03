@@ -181,34 +181,7 @@ def render_results(results: dict):
         "isf": "Correction Factor / Sensitivity (ISF)",
         "target": "Target Glucose (BGT)",
     }
-    if any(schedule_proposal.get(k, {}).get("segments") for k in schedule_labels):
-        st.header("Proposed New Time Schedule")
-        st.caption(
-            "This re-derives segment boundaries from the data (up to 8 per "
-            "setting), not just values within your current segments -- a "
-            "different question than the proposal above (\"should today's "
-            "numbers change\" vs. \"is today's schedule shape even right\"). "
-            "Same caution applies: one variable at a time, small steps, hold "
-            "and re-check."
-        )
-
-        for key, label in schedule_labels.items():
-            setting = schedule_proposal.get(key) or {}
-            segments = setting.get("segments") or []
-            if not segments:
-                continue
-            st.subheader(label)
-            if setting.get("note"):
-                st.info(setting["note"])
-            df = pd.DataFrame(segments)[
-                ["time_block", "current_weighted_baseline", "proposed_value", "confidence"]
-            ].rename(columns={
-                "time_block": "Time block",
-                "current_weighted_baseline": "Current weighted baseline",
-                "proposed_value": "Proposed value",
-                "confidence": "Confidence",
-            })
-            st.dataframe(df, hide_index=True, use_container_width=True)
+    has_schedule_proposal = any(schedule_proposal.get(k, {}).get("segments") for k in schedule_labels)
 
     if current_settings:
         st.header("Current vs Recommended")
@@ -219,23 +192,50 @@ def render_results(results: dict):
         st.subheader("Key Settings")
         st.dataframe(pd.DataFrame(comparison["scalars"]), hide_index=True, use_container_width=True)
 
+        st.subheader("Same Time Segments (today's boundaries, adjusted values)")
         for key, title in [
             ("basal_segments", "Basal Rate (units/hr)"),
             ("isf_segments", "Insulin Sensitivity Factor (1:X mg/dL per unit)"),
             ("carb_ratio_segments", "Carb Ratio (g per unit)"),
         ]:
             if comparison[key]:
-                st.subheader(title)
+                st.markdown(f"**{title}**")
                 st.dataframe(segment_dataframe(comparison[key]), hide_index=True, use_container_width=True)
 
         if comparison["target_segments"]:
-            st.subheader("Target BG (mg/dL)")
+            st.markdown("**Target BG (mg/dL)**")
             st.caption(
                 "This tool computes a single overall correction target, not "
                 "per-segment targets -- shown here for reference against each "
                 "current segment."
             )
             st.dataframe(segment_dataframe(comparison["target_segments"]), hide_index=True, use_container_width=True)
+
+        if has_schedule_proposal:
+            st.subheader("New Time Segments (boundaries discovered from the data, up to 8 per setting)")
+            st.caption(
+                "A different question than the segments above (\"should today's "
+                "numbers change\" vs. \"is today's schedule shape even right\"). "
+                "Same caution applies: one variable at a time, small steps, hold "
+                "and re-check."
+            )
+            for key, label in schedule_labels.items():
+                setting = schedule_proposal.get(key) or {}
+                segments = setting.get("segments") or []
+                if not segments:
+                    continue
+                st.markdown(f"**{label}**")
+                if setting.get("note"):
+                    st.info(setting["note"])
+                df = pd.DataFrame(segments)[
+                    ["time_block", "current_weighted_baseline", "proposed_value", "confidence"]
+                ].rename(columns={
+                    "time_block": "Time block",
+                    "current_weighted_baseline": "Current weighted baseline",
+                    "proposed_value": "Proposed value",
+                    "confidence": "Confidence",
+                })
+                st.dataframe(df, hide_index=True, use_container_width=True)
 
     st.header("Download")
     report_with_disclaimer = {"disclaimer": DISCLAIMER, **recommendation_dict}

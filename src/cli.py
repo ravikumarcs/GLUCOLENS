@@ -84,16 +84,15 @@ def main():
             output = recommendations.to_dict()
 
         recommendation_dict = output.get("recommendations", output)
+        schedule_proposal = engine.generate_schedule_proposal() if current_settings else {}
         comparison_lines = (
-            build_comparison_report(current_settings, recommendation_dict)
+            build_comparison_report(current_settings, recommendation_dict, schedule_proposal)
             if current_settings else []
         )
         findings_lines = (
             build_findings_report(engine.generate_findings_report())
             if current_settings else []
         )
-        schedule_proposal = engine.generate_schedule_proposal() if current_settings else {}
-        schedule_lines = build_schedule_report(schedule_proposal)
 
         # Output results
         if args.format == "json":
@@ -112,8 +111,6 @@ def main():
             output_text = format_output(output) + "\n\n" + format_disclaimer_block(output)
             if findings_lines:
                 output_text += "\n\n" + "\n".join(findings_lines)
-            if schedule_lines:
-                output_text += "\n\n" + "\n".join(schedule_lines)
             if comparison_lines:
                 output_text += "\n\n" + "\n".join(comparison_lines)
         
@@ -134,8 +131,11 @@ def main():
         return 1
 
 
-def build_comparison_report(current: dict, recommendation: dict) -> list:
-    """Build a current-vs-recommended comparison as a list of text lines.
+def build_comparison_report(current: dict, recommendation: dict, schedule_proposal: dict = None) -> list:
+    """Build a current-vs-recommended comparison as a list of text lines,
+    covering both comparison modes side by side: today's segment boundaries
+    with adjusted values, and the newly-discovered schedule (different
+    boundaries, up to 8 segments) if `schedule_proposal` is provided.
 
     `current` follows the schema in data/sample_current_settings.json.
     `recommendation` is an OmnipodSettings.to_dict() (or the "recommendations"
@@ -161,6 +161,9 @@ def build_comparison_report(current: dict, recommendation: dict) -> list:
         lines.append(f"{scalar['label'].upper()} ({scalar['unit']}):")
         lines.append(line("", scalar["current"], scalar["recommended"]))
         lines.append("")
+
+    lines.append("-- SAME TIME SEGMENTS (today's boundaries, adjusted values) --")
+    lines.append("")
 
     if comparison["basal_segments"]:
         lines.append("BASAL RATE (units/hr) by current segment start hour:")
@@ -188,6 +191,24 @@ def build_comparison_report(current: dict, recommendation: dict) -> list:
         for seg in comparison["target_segments"]:
             lines.append(line(f"{seg['hour']:02d}:00", seg["current"], seg["recommended_correction_target"]))
         lines.append("")
+
+    if schedule_proposal and any((schedule_proposal.get(k) or {}).get("segments") for k in SCHEDULE_SETTING_LABELS):
+        lines.append("-- NEW TIME SEGMENTS (up to 8 per setting, boundaries discovered from the data) --")
+        lines.append("")
+        for key, label in SCHEDULE_SETTING_LABELS.items():
+            setting = schedule_proposal.get(key) or {}
+            segments = setting.get("segments") or []
+            if not segments:
+                continue
+            lines.append(f"{label}:")
+            if setting.get("note"):
+                lines.append(f"  {setting['note']}")
+            for seg in segments:
+                lines.append(
+                    f"  [{seg['time_block']}] current weighted baseline: {seg['current_weighted_baseline']}"
+                    f"  ->  proposed: {seg['proposed_value']}  ({seg['confidence']})"
+                )
+            lines.append("")
 
     return lines
 
@@ -223,45 +244,6 @@ SCHEDULE_SETTING_LABELS = {
     "isf": "CORRECTION FACTOR / SENSITIVITY (ISF)",
     "target": "TARGET GLUCOSE (BGT)",
 }
-
-
-def build_schedule_report(proposal: dict) -> list:
-    """Format generate_schedule_proposal()'s output: a from-scratch,
-    data-driven time schedule (<=8 segments per setting), independent of
-    the pump's currently-configured segment boundaries. A different
-    question than the findings report above -- that one only adjusts
-    values within existing segments; this one questions whether the
-    segment boundaries themselves are in the right place.
-    """
-    if not proposal:
-        return []
-
-    lines = [
-        "=" * 60,
-        "PROPOSED NEW TIME SCHEDULE (up to 8 segments per setting)",
-        "=" * 60,
-        "",
-        "This re-derives segment BOUNDARIES from the data, not just values "
-        "within your existing segments -- treat it as a structural proposal, "
-        "subject to the same caution as the report above: one variable at a "
-        "time, small steps, hold and re-check.",
-        "",
-    ]
-
-    for key, label in SCHEDULE_SETTING_LABELS.items():
-        setting = proposal.get(key)
-        if not setting:
-            continue
-        lines.append(f"\n{label}:")
-        if setting.get("note"):
-            lines.append(f"  {setting['note']}")
-        for seg in setting["segments"]:
-            lines.append(
-                f"  [{seg['time_block']}] current weighted baseline: {seg['current_weighted_baseline']}"
-                f"  ->  proposed: {seg['proposed_value']}  ({seg['confidence']})"
-            )
-
-    return lines
 
 
 def build_findings_report(findings: list) -> list:
