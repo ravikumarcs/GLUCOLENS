@@ -251,6 +251,14 @@ class TestBaselineRelativeEngine(unittest.TestCase):
 
         self.assertTrue(any("address basal" in w.lower() for w in settings.warnings))
 
+        # Concrete evidence: one row per agreeing clean window, with a date,
+        # a BG value at each end of the window, and a slope.
+        self.assertEqual(len(seg0["evidence"]), 5)
+        row = seg0["evidence"][0]
+        for key in ("date", "time_start", "bg_start", "time_end", "bg_end", "slope_mgdl_per_hr"):
+            self.assertIn(key, row)
+        self.assertGreater(row["slope_mgdl_per_hr"], 0)
+
     def test_insufficient_evidence_leaves_segment_unchanged(self):
         data = _build_drift_data("rising", days=2, hour_range=(0, 6))
         current_settings = {
@@ -298,6 +306,48 @@ class TestBaselineRelativeEngine(unittest.TestCase):
         # every setting present should appear in this relative order
         indices = [expected_order.index(s) for s in settings_seen]
         self.assertEqual(indices, sorted(indices))
+
+        # Every finding carries an "evidence" list, even when there wasn't
+        # enough of it to propose a change -- it should still show what was
+        # evaluated (dates, BG values), not just the aggregate count.
+        icr_finding = next(f for f in findings if f["setting"] == "Insulin-to-Carb Ratio (ICR)")
+        self.assertIn("evidence", icr_finding)
+        self.assertTrue(icr_finding["evidence"])
+        icr_row = icr_finding["evidence"][0]
+        for key in ("date", "time", "carbs", "bg_before", "bg_after"):
+            self.assertIn(key, icr_row)
+
+        target_finding = next(f for f in findings if f["setting"] == "Target Glucose (BGT)")
+        self.assertIn("evidence", target_finding)
+
+    def test_icr_evidence_reflects_the_meals_driving_the_proposal(self):
+        """With enough qualifying meals to trigger a proposal, the evidence
+        rows should be exactly the too_weak meals that drove it -- concrete,
+        dated, with real BG values -- not the full evaluated set."""
+        data = GloocolData()
+        base = datetime(2026, 1, 1)
+        for day in range(4):
+            meal = base + timedelta(days=day, hours=8)
+            data.meals.append(MealEvent(timestamp=meal, carbs=40))
+            for m in range(-30, 0, 5):
+                data.glucose_readings.append(_gr(meal + timedelta(minutes=m), 110))
+            for m in range(150, 210, 10):
+                data.glucose_readings.append(_gr(meal + timedelta(minutes=m), 260))
+
+        current_settings = {
+            "active_insulin_time": 4.0,
+            "carb_ratio_segments": [{"start_hour": 0, "value": 20.0}],
+        }
+        engine = OmnipodRecommendationEngine(data, current_settings=current_settings)
+        engine.generate_recommendations()
+        finding = engine.generate_findings_report()[0]
+
+        self.assertEqual(finding["proposed_direction"], "lower")
+        self.assertEqual(len(finding["evidence"]), 4)
+        for row in finding["evidence"]:
+            self.assertEqual(row["bg_before"], 110.0)
+            self.assertEqual(row["bg_after"], 260.0)
+            self.assertEqual(row["carbs"], 40)
 
 
 if __name__ == "__main__":

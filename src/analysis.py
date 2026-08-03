@@ -372,7 +372,7 @@ class GlucoseAnalyzer:
         start_h, end_h = hour_range
         segment_span_hours = end_h - start_h
 
-        slopes = []
+        instances = []
         for window in clean_windows:
             day = window["start"].date() - timedelta(days=1)
             last_day = window["end"].date() + timedelta(days=1)
@@ -385,11 +385,18 @@ class GlucoseAnalyzer:
                     overlap_readings = self._readings_in_range(overlap_start, overlap_end)
                     slope = self._fit_slope_mgdl_per_hour(overlap_readings)
                     if slope is not None:
-                        slopes.append(slope)
+                        instances.append({
+                            "date": overlap_readings[0].timestamp.date(),
+                            "window_start": overlap_readings[0].timestamp,
+                            "window_end": overlap_readings[-1].timestamp,
+                            "bg_start": overlap_readings[0].value,
+                            "bg_end": overlap_readings[-1].value,
+                            "slope": slope,
+                        })
                 day += timedelta(days=1)
 
-        rising = [s for s in slopes if s > self.BASAL_DRIFT_THRESHOLD_MGDL_PER_HR]
-        falling = [s for s in slopes if s < -self.BASAL_DRIFT_THRESHOLD_MGDL_PER_HR]
+        rising = [i for i in instances if i["slope"] > self.BASAL_DRIFT_THRESHOLD_MGDL_PER_HR]
+        falling = [i for i in instances if i["slope"] < -self.BASAL_DRIFT_THRESHOLD_MGDL_PER_HR]
 
         if len(rising) >= self.MIN_PATTERN_INSTANCES and len(rising) >= len(falling):
             direction, agreeing = "rising", rising
@@ -402,13 +409,14 @@ class GlucoseAnalyzer:
             direction, agreeing = "stable", []
 
         return {
-            "n_instances": len(slopes),
+            "n_instances": len(instances),
             "n_rising": len(rising),
             "n_falling": len(falling),
-            "n_stable": len(slopes) - len(rising) - len(falling),
+            "n_stable": len(instances) - len(rising) - len(falling),
             "direction": direction,
-            "median_slope": float(np.median(agreeing)) if agreeing else None,
+            "median_slope": float(np.median([i["slope"] for i in agreeing])) if agreeing else None,
             "sufficient_evidence": len(agreeing) >= self.MIN_PATTERN_INSTANCES,
+            "instances": agreeing,
         }
 
     def analyze_meal_response_for_icr(

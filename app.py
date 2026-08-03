@@ -57,6 +57,31 @@ def segment_dataframe(rows: list) -> pd.DataFrame:
     return df
 
 
+EVIDENCE_COLUMN_LABELS = {
+    "Basal": {
+        "date": "Date", "time_start": "Window start", "bg_start": "BG at start (mg/dL)",
+        "time_end": "Window end", "bg_end": "BG at end (mg/dL)", "slope_mgdl_per_hr": "Slope (mg/dL/hr)",
+    },
+    "Insulin-to-Carb Ratio (ICR)": {
+        "date": "Date", "time": "Meal time", "carbs": "Carbs (g)",
+        "bg_before": "BG before (mg/dL)", "bg_after": "BG ~3h after (mg/dL)",
+    },
+    "Correction Factor / Sensitivity (ISF)": {
+        "date": "Date", "time": "Correction time", "correction_dose": "Dose (U)",
+        "bg_before": "BG before (mg/dL)", "bg_after": "BG 3-4h after (mg/dL)",
+    },
+    "Target Glucose (BGT)": {
+        "date": "Date", "below_pct": "Below range (%)", "above_pct": "Above range (%)",
+    },
+}
+
+
+def evidence_dataframe(setting: str, evidence: list) -> pd.DataFrame:
+    df = pd.DataFrame(evidence)
+    labels = EVIDENCE_COLUMN_LABELS.get(setting, {})
+    return df.rename(columns=labels)
+
+
 def render_results(results: dict):
     data = results["data"]
     recommendations = results["recommendations"]
@@ -141,6 +166,14 @@ def render_results(results: dict):
                     st.write(f"**Confidence:** {finding['confidence']}")
                     if finding.get("what_to_watch"):
                         st.write(f"**What to watch:** {finding['what_to_watch']}")
+                    evidence = finding.get("evidence") or []
+                    if evidence:
+                        st.write("**Evidence:**")
+                        st.dataframe(
+                            evidence_dataframe(setting, evidence),
+                            hide_index=True,
+                            use_container_width=True,
+                        )
 
     if current_settings:
         st.header("Current vs Recommended")

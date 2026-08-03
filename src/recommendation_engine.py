@@ -451,6 +451,63 @@ class OmnipodRecommendationEngine:
             end_display = 24
         return f"{start_h:02d}:00-{end_display:02d}:00"
 
+    @staticmethod
+    def _basal_evidence(instances: List[Dict]) -> List[Dict]:
+        """Concrete per-night evidence rows for a basal drift finding."""
+        return [
+            {
+                "date": inst["date"].isoformat(),
+                "time_start": inst["window_start"].strftime("%H:%M"),
+                "bg_start": round(inst["bg_start"], 1),
+                "time_end": inst["window_end"].strftime("%H:%M"),
+                "bg_end": round(inst["bg_end"], 1),
+                "slope_mgdl_per_hr": round(inst["slope"], 1),
+            }
+            for inst in sorted(instances, key=lambda i: i["date"])
+        ]
+
+    @staticmethod
+    def _meal_evidence(meals: List[Dict]) -> List[Dict]:
+        """Concrete per-meal evidence rows for an ICR finding."""
+        return [
+            {
+                "date": m["meal_time"].date().isoformat(),
+                "time": m["meal_time"].strftime("%H:%M"),
+                "carbs": m["carbs"],
+                "bg_before": round(m["pre_meal_glucose"], 1),
+                "bg_after": round(
+                    m["glucose_at_3h"] if m["glucose_at_3h"] is not None else m["peak_glucose"], 1
+                ),
+            }
+            for m in sorted(meals, key=lambda m: m["meal_time"])
+        ]
+
+    @staticmethod
+    def _correction_event_evidence(events: List[Dict]) -> List[Dict]:
+        """Concrete per-event evidence rows for a CF/ISF finding."""
+        return [
+            {
+                "date": e["time"].date().isoformat(),
+                "time": e["time"].strftime("%H:%M"),
+                "correction_dose": e["correction_dose"],
+                "bg_before": round(e["pre_bolus_glucose"], 1),
+                "bg_after": round(e["post_window_min"], 1),
+            }
+            for e in sorted(events, key=lambda e: e["time"])
+        ]
+
+    @staticmethod
+    def _daily_tir_evidence(days: List[Dict]) -> List[Dict]:
+        """Concrete per-day evidence rows for a target-glucose finding."""
+        return [
+            {
+                "date": d["day"].isoformat(),
+                "below_pct": round(d["below_pct"], 1),
+                "above_pct": round(d["above_pct"], 1),
+            }
+            for d in sorted(days, key=lambda d: d["day"])
+        ]
+
     def _generate_basal_profile_from_baseline(
         self, current_settings: Dict, warnings: List[str], findings: List[Dict]
     ) -> BasalProfile:
@@ -500,6 +557,7 @@ class OmnipodRecommendationEngine:
                         "Re-check this window in 3-5 days; watch for a new low or high "
                         "cluster shifting into an adjacent time block."
                     ),
+                    "evidence": self._basal_evidence(drift["instances"]),
                 })
             else:
                 new_rate = current_rate
@@ -516,6 +574,7 @@ class OmnipodRecommendationEngine:
                     "magnitude_pct": 0.0,
                     "confidence": "insufficient evidence",
                     "what_to_watch": None,
+                    "evidence": self._basal_evidence(drift["instances"]),
                 })
 
             for h in hours_in_range(start_h, end_h):
@@ -580,12 +639,14 @@ class OmnipodRecommendationEngine:
                     "read)."
                 )
                 watch = None
+                evidence_source = segment_events
             else:
                 factor = 1 - self.ADJUSTMENT_STEP_FRACTION if direction == "lower" else 1 + self.ADJUSTMENT_STEP_FRACTION
                 new_value = round(current_value * factor, 1)
                 verb = "were still elevated" if direction == "lower" else "went low"
                 pattern = f"{count} of {len(segment_events)} correction-only event(s) in this window {verb} 3-4h later."
                 watch = "Watch for overcorrection lows following a correction bolus in this window."
+                evidence_source = too_weak if direction == "lower" else too_strong
 
             findings.append({
                 "setting": "Correction Factor / Sensitivity (ISF)",
@@ -594,6 +655,7 @@ class OmnipodRecommendationEngine:
                 "pattern_observed": pattern,
                 "proposed_direction": direction,
                 "proposed_value": new_value,
+                "evidence": self._correction_event_evidence(evidence_source),
                 "magnitude_pct": round(self.ADJUSTMENT_STEP_FRACTION * 100, 1) if direction != "no change" else 0.0,
                 "confidence": f"supported (n={count})" if direction != "no change" else "insufficient evidence",
                 "what_to_watch": watch,
@@ -647,6 +709,7 @@ class OmnipodRecommendationEngine:
                     "in this window -- fewer than 3 support a direction."
                 )
                 watch = None
+                evidence_source = segment_meals
             else:
                 factor = 1 - self.ADJUSTMENT_STEP_FRACTION if direction == "lower" else 1 + self.ADJUSTMENT_STEP_FRACTION
                 new_value = self._clamp_carb_ratio(round(current_value * factor, 1))
@@ -660,12 +723,14 @@ class OmnipodRecommendationEngine:
                     if direction == "lower" else
                     "Watch for the post-meal spike returning after loosening."
                 )
+                evidence_source = too_weak if direction == "lower" else too_strong
 
             findings.append({
                 "setting": "Insulin-to-Carb Ratio (ICR)",
                 "time_block": time_block,
                 "current_value": current_value,
                 "pattern_observed": pattern,
+                "evidence": self._meal_evidence(evidence_source),
                 "proposed_direction": direction,
                 "proposed_value": new_value,
                 "magnitude_pct": round(self.ADJUSTMENT_STEP_FRACTION * 100, 1) if direction != "no change" else 0.0,
@@ -720,6 +785,7 @@ class OmnipodRecommendationEngine:
                     "consistent lows- or highs-dominant pattern on 3+ days."
                 )
                 watch = None
+                evidence_source = daily
             else:
                 new_value = min(target_max, max(target_min + 10, current_value + delta))
                 dominant = "lows" if direction == "raise" else "highs"
@@ -728,12 +794,18 @@ class OmnipodRecommendationEngine:
                     "Target interacts with both ICR and CF -- re-check this window last, "
                     "after basal/ICR/CF changes have settled."
                 )
+                evidence_source = (
+                    [d for d in daily if d["below_pct"] > 0 and d["below_pct"] >= d["above_pct"]]
+                    if direction == "raise" else
+                    [d for d in daily if d["above_pct"] > 0 and d["above_pct"] > d["below_pct"]]
+                )
 
             findings.append({
                 "setting": "Target Glucose (BGT)",
                 "time_block": time_block,
                 "current_value": current_value,
                 "pattern_observed": pattern,
+                "evidence": self._daily_tir_evidence(evidence_source),
                 "proposed_direction": direction,
                 "proposed_value": new_value,
                 "magnitude_pct": None,

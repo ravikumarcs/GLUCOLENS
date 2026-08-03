@@ -186,11 +186,38 @@ def build_comparison_report(current: dict, recommendation: dict) -> list:
     return lines
 
 
+EVIDENCE_DISPLAY_LIMIT = 8  # cap per-finding evidence rows shown in text output
+
+
+def _format_evidence_row(setting: str, row: dict) -> str:
+    """One concrete evidence line (date, times, BG before/after) for a finding."""
+    if setting == "Basal":
+        return (
+            f"      {row['date']}  {row['time_start']}->{row['time_end']}  "
+            f"BG {row['bg_start']:.0f}->{row['bg_end']:.0f} mg/dL  "
+            f"({row['slope_mgdl_per_hr']:+.1f} mg/dL/hr)"
+        )
+    if setting == "Insulin-to-Carb Ratio (ICR)":
+        return (
+            f"      {row['date']} {row['time']}  {row['carbs']:.0f}g carbs  "
+            f"BG {row['bg_before']:.0f} before -> {row['bg_after']:.0f} mg/dL after"
+        )
+    if setting == "Correction Factor / Sensitivity (ISF)":
+        return (
+            f"      {row['date']} {row['time']}  {row['correction_dose']:.2f}u correction  "
+            f"BG {row['bg_before']:.0f} before -> {row['bg_after']:.0f} mg/dL after"
+        )
+    if setting == "Target Glucose (BGT)":
+        return f"      {row['date']}  below range {row['below_pct']:.0f}%, above range {row['above_pct']:.0f}%"
+    return f"      {row}"
+
+
 def build_findings_report(findings: list) -> list:
     """Format the baseline-relative "Quick Proposal Template" findings as
     text lines: one block per setting+segment with the pattern observed,
-    proposed change, confidence, and what to watch -- meant to be brought to
-    an appointment, per the tuning guide this methodology follows.
+    proposed change, confidence, concrete evidence (dates/times/BG
+    before-after), and what to watch -- meant to be brought to an
+    appointment, per the tuning guide this methodology follows.
     """
     if not findings:
         return []
@@ -222,6 +249,15 @@ def build_findings_report(findings: list) -> list:
             )
             if finding.get("what_to_watch"):
                 lines.append(f"    what to watch: {finding['what_to_watch']}")
+
+        evidence = finding.get("evidence") or []
+        if evidence:
+            lines.append("    evidence:")
+            for row in evidence[:EVIDENCE_DISPLAY_LIMIT]:
+                lines.append(_format_evidence_row(finding["setting"], row))
+            if len(evidence) > EVIDENCE_DISPLAY_LIMIT:
+                lines.append(f"      ... and {len(evidence) - EVIDENCE_DISPLAY_LIMIT} more (full list in JSON output)")
+
         lines.append("")
 
     return lines
